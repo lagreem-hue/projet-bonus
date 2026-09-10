@@ -1,0 +1,166 @@
+services:
+  # ============================================
+  # SERVICE 1 : BASE DE DONNÉES PostgreSQL
+  # ============================================
+  db:
+    image: postgres:16                      # Image officielle PostgreSQL version 16
+    container_name: etnair_db               # Nom du conteneur (pour le retrouver facilement avec "docker ps")
+    environment:
+      POSTGRES_USER: etnair_user            # Nom d'utilisateur de la base de données
+      POSTGRES_PASSWORD: etnair_pass        # Mot de passe de l'utilisateur
+      POSTGRES_DB: etnair_db                # Nom de la base de données créée automatiquement au démarrage
+    volumes:
+      - db_data:/var/lib/postgresql/data    # Volume nommé pour persister les données (survit à "docker-compose down")
+    networks:
+      - etnair_net                          # Réseau interne pour que les services communiquent entre eux
+    ports:
+      - "5432:5432"                         # Expose le port PostgreSQL (hôte:conteneur)
+    healthcheck:
+      # Docker va ATTENDRE que PostgreSQL soit vraiment démarrée avant de lancer l'API
+      # Sans ça, l'API démarre avant que la DB soit prête → CRASH !
+      test: ["CMD-SHELL", "pg_isready -U etnair_user -d etnair_db"]   # Commande pour vérifier si PostgreSQL accepte des connexions
+      interval: 10s                         # Vérifier toutes les 10 secondes
+      timeout: 5s                           # Temps max d'attente d'une réponse
+      retries: 5                            # Nombre d'essais avant d'abandonner
+
+  # ============================================
+  # SERVICE 2 : API BACKEND (Node.js + Express)
+  # ============================================
+  api:
+    build: ./api                            # Construit l'image Docker depuis le Dockerfile dans ./api
+    container_name: etnair_api              # Nom du conteneur
+    environment:
+      # URL de connexion complète à PostgreSQL
+      # Format: postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+      # @db → "db" est le NOM DU SERVICE Docker (pas "localhost" !)
+      DATABASE_URL: postgresql://etnair_user:etnair_pass@db:5432/etnair_db
+      
+      # JWT (Authentification - Semaine 2-3)
+      JWT_SECRET: your_jwt_secret_change_in_production    # Clé secrète pour signer les tokens JWT
+      JWT_EXPIRES_IN: 1h                                  # Durée de validité d'un token
+      
+      # Configuration serveur
+      PORT: 3000
+      NODE_ENV: development
+      
+      # MinIO / AWS S3 (Stockage d'images - Semaine 3 BONUS)
+      # MinIO est compatible avec l'API AWS S3, donc on utilise les mêmes variables
+      AWS_ACCESS_KEY_ID: minioadmin                       # Login MinIO (comme un username)
+      AWS_SECRET_ACCESS_KEY: minioadmin                   # Password MinIO
+      AWS_ENDPOINT: http://minio:9000                     # Adresse du serveur MinIO
+      AWS_BUCKET_NAME: etnair-images                      # Nom du "dossier" où stocker les images
+      AWS_REGION: us-east-1                               # Obligatoire pour AWS SDK (même si MinIO est local)
+      
+      # Cloudinary (Service cloud externe pour images - BONUS FUTUR)
+      CLOUDINARY_CLOUD_NAME: your_cloud_name
+      CLOUDINARY_API_KEY: your_api_key
+      CLOUDINARY_API_SECRET: your_api_secret
+      
+      # Stripe (Paiements en ligne - Semaine 5 BONUS)
+      STRIPE_SECRET_KEY: your_stripe_secret_key
+      STRIPE_WEBHOOK_SECRET: your_stripe_webhook_secret
+      
+      # Email (Notifications par email - BONUS)
+      SMTP_HOST: smtp.gmail.com                           # Serveur SMTP de Gmail
+      SMTP_PORT: 587                                      # Port standard pour envoi sécurisé
+      SMTP_USER: your_email@gmail.com
+      SMTP_PASS: your_app_password                        # ⚠️ Pas votre mot de passe Gmail ! Générez un "mot de passe d'application" dans les paramètres Gmail
+    ports:
+      - "3000:3000"                         # Expose l'API sur http://localhost:3000
+    depends_on:
+      # L'API ne démarre QUE SI PostgreSQL est prête
+      db:
+        condition: service_healthy          # Attend que le healthcheck de PostgreSQL soit OK
+      # MinIO est optionnel : on attend juste qu'il ait démarré (pas de healthcheck requis)
+      # Donc si vous ne lancez pas MinIO, l'API démarrera quand même !
+      # minio:
+      #   condition: service_started        # ← COMMENTÉ pour rendre MinIO optionnel
+    networks:
+      - etnair_net
+    volumes:
+      # Volume 1 : Synchronise votre code local avec le conteneur
+      # Effet : Vous modifiez server.js → le conteneur voit le changement instantanément
+      - ./api:/app
+      # Volume 2 : Évite d'écraser node_modules du conteneur avec votre dossier local vide
+      - /app/node_modules
+    command: npm run dev                    # Lance nodemon qui redémarre automatiquement l'API à chaque changement de fichier
+
+  # ============================================
+  # SERVICE 3 : MINIO (Stockage d'images S3)
+  # ============================================
+  minio:
+    image: minio/minio                      # Image officielle MinIO
+    container_name: etnair_minio
+    command: server /data --console-address ":9001"    # Démarre MinIO + active l'interface web sur le port 9001
+    environment:
+      MINIO_ROOT_USER: minioadmin           # Login pour accéder à MinIO
+      MINIO_ROOT_PASSWORD: minioadmin       # Mot de passe
+    ports:
+      - "9000:9000"                         # Port API S3 (utilisé par le backend avec aws-sdk)
+      - "9001:9001"                         # Port interface web (pour vous : http://localhost:9001)
+    volumes:
+      - minio_data:/data                    # Persiste les images uploadées (survit à "docker-compose down")
+    networks:
+      - etnair_net
+    healthcheck:
+      # Vérifie que MinIO est accessible
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    profiles:
+      - full                                # ← IMPORTANT : MinIO ne démarre que si vous faites "docker-compose --profile full up"
+
+  # ============================================
+  # SERVICE 4 : pgAdmin (Interface PostgreSQL)
+  # ============================================
+  pgadmin:
+    image: dpage/pgadmin4                   # Interface web pour gérer PostgreSQL (comme phpMyAdmin pour MySQL)
+    container_name: etnair_pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@etnair.com     # Login de l'interface web
+      PGADMIN_DEFAULT_PASSWORD: admin             # Mot de passe
+    ports:
+      - "5050:80"                           # Interface accessible sur http://localhost:5050
+    depends_on:
+      - db                                  # Démarre après PostgreSQL
+    networks:
+      - etnair_net
+
+  # ============================================
+  # SERVICE 5 : FRONTEND (Next.js - Semaine 4)
+  # ============================================
+  front:
+    build: ./front                          # Construit l'image depuis ./front/Dockerfile
+    container_name: etnair_front
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3000          # URL de l'API backend
+      NEXT_PUBLIC_SOCKET_URL: http://localhost:3000       # URL WebSocket pour notifications temps réel
+      NEXT_PUBLIC_STRIPE_PUBLIC_KEY: your_stripe_public_key   # Clé publique Stripe (côté client)
+    ports:
+      - "3001:3000"                         # Frontend accessible sur http://localhost:3001 (3000 est déjà pris par l'API)
+    depends_on:
+      - api                                 # Démarre après l'API
+    networks:
+      - etnair_net
+    volumes:
+      - ./front:/app                        # Synchronise le code frontend
+      - /app/node_modules                   # Évite d'écraser node_modules
+      - /app/.next                          # Évite de synchroniser le dossier .next (build Next.js)
+    command: npm run dev
+    profiles:
+      - full                                # ← Frontend optionnel (uniquement en Semaine 4+)
+
+# ============================================
+# RÉSEAUX
+# ============================================
+networks:
+  etnair_net:
+    driver: bridge                          # Crée un réseau virtuel privé pour que tous les services communiquent entre eux
+
+# ============================================
+# VOLUMES (Stockage persistant)
+# ============================================
+volumes:
+  db_data:        # Stocke les données PostgreSQL (survit à "docker-compose down")
+  minio_data:     # Stocke les images MinIO (survit à "docker-compose down")
