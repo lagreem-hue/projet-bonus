@@ -1,0 +1,18 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ab-load-test
+spec:
+  template:
+    spec:
+      containers:
+      - name: ab
+        image: httpd:2.4
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "Running Apache Bench load test"
+            ab -n 50000 -c 200 http://backend.default.svc.cluster.local/health
+      restartPolicy: Never
+  backoffLimit: 1
