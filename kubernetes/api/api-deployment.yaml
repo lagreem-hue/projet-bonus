@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etnair-api
+  namespace: etnair
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etnair-api
+  template:
+    metadata:
+      labels:
+        app: etnair-api
+    spec:
+      containers:
+        - name: etnair-api
+          image: docker.io/etnair/api:latest
+          env:
+            - name: DATABASE_URL
+              value: "postgresql://etnair_user:etnair_pass@postgresql.etnair.svc.cluster.local:5432/etnair_db"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: api-secret
+                  key: JWT_SECRET
+          ports:
+            - containerPort: 3000
