@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etnair-api
+  labels:
+    app: etnair-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: etnair-api
+  template:
+    metadata:
+      labels:
+        app: etnair-api
+    spec:
+      containers:
+      - name: etnair-api
+        image: etnair-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+        env:
+        - name: DATABASE_URL
+          value: "postgresql://etnair_user:etnair_pass@postgresql:5432/etnair_db"
+        - name: JWT_SECRET
+          value: "your_jwt_secret_change_in_production"
+        - name: JWT_EXPIRES_IN
+          value: "1h"
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: "development"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
